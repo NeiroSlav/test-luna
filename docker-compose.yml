@@ -1,0 +1,30 @@
+services:
+  postgres-db:
+    image: postgres:15-alpine
+    container_name: postgres-db
+    env_file: "./config/.env"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d database"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  org-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./src/migrations:/app/migrations
+      # - ./data/log:/log
+      - ./config/.env:/.env
+    restart: always
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    ports:
+      - "8080"
