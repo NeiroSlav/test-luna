@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from api.routers.activity import activity_router
+from api.routers.building import building_router
 from api.routers.org import org_router
 from infra.sql import run_migrations
 
@@ -26,4 +28,7 @@ def create_app() -> FastAPI:
 
     # Подключение роутеров
     app.include_router(org_router)
+    app.include_router(building_router)
+    app.include_router(activity_router)
+
     return app

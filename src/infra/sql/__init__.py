@@ -5,6 +5,7 @@ from infra.sql.db_init import (
     get_async_session,
     run_migrations,
 )
+from infra.sql.models import *
 from infra.sql.repo import AlchemyOrganizationRepo
 
 __all__ = [
