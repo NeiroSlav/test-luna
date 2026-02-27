@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from api.exceptions import setup_error_handlers
 from api.routers.activity import activity_router
 from api.routers.building import building_router
 from api.routers.org import org_router
@@ -26,6 +27,9 @@ def create_app() -> FastAPI:
         title="Organization App",
         lifespan=lifespan,
     )
+
+    # Подключение обработки ошибок
+    setup_error_handlers(app)
 
     # Подключение роутеров
     app.include_router(org_router)
