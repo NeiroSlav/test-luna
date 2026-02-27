@@ -1,7 +1,7 @@
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-from infra.sql import OrganizationModel
+from infra.sql import BuildingModel, OrganizationModel
 
 
 class BaseDTO(BaseModel):
@@ -16,6 +16,23 @@ class BaseDTO(BaseModel):
     )
 
 
+class BuildingDTO(BaseDTO):
+    """Публичный DTO здания."""
+
+    id: int
+    coords: tuple[float, float]
+    address: str
+
+    @classmethod
+    def from_infra(cls, orm_model: BuildingModel) -> "BuildingDTO":
+        """Фабричный метод создания из ORM-модели."""
+        return cls(
+            id=orm_model.id,
+            coords=(orm_model.latitude, orm_model.longitude),
+            address=orm_model.address,
+        )
+
+
 class OrgDTO(BaseDTO):
     """
     Публичный DTO организации.
@@ -23,17 +40,17 @@ class OrgDTO(BaseDTO):
 
     id: int
     name: str
-    address: str
+    building: BuildingDTO
     phone_numbers: list[str]
     activities: list[str]
 
     @classmethod
-    def from_orm_model(cls, orm_model: OrganizationModel) -> "OrgDTO":
+    def from_infra(cls, orm_model: OrganizationModel) -> "OrgDTO":
         """Фабричный метод создания из ORM-модели."""
         return cls(
             id=orm_model.id,
             name=orm_model.name,
-            address=orm_model.building.address,
+            building=BuildingDTO.from_infra(orm_model.building),
             phone_numbers=[n.number for n in orm_model.phones],
             activities=[a.name for a in orm_model.activities],
         )

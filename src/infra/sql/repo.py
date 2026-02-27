@@ -1,14 +1,9 @@
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
-from infra.sql.models import (
-    ActivityModel,
-    BuildingModel,
-    OrganizationModel,
-    PhoneModel,
-    organization_activity,
-)
+from infra.sql.models import ActivityModel, BuildingModel, OrganizationModel, PhoneModel
+from infra.sql.utils import get_bounding_box
 
 
 class AlchemyOrganizationRepo:
@@ -34,7 +29,7 @@ class AlchemyOrganizationRepo:
         await self.session.refresh(building)
         return building
 
-    async def _calc_activity_level(self, parent_name: str) -> int:
+    async def _assert_valid_parent(self, parent_name: str) -> ActivityModel:
         """
         Проверить родительский вид деятельности, рассчитать глубину вложенности.
         """
@@ -48,7 +43,7 @@ class AlchemyOrganizationRepo:
             raise ValueError(
                 f"Cannot add child to activity at level {parent.level}, max: {self.MAX_ACTIVITY_LEVEL}"
             )
-        return parent.level + 1
+        return parent
 
     async def add_activity(
         self, name: str, parent_name: str | None = None
@@ -56,14 +51,14 @@ class AlchemyOrganizationRepo:
         """
         Добавить вид деятельности с проверкой уровня вложенности.
         """
-        parent = None
+        parent_id = None
         level = 1
         if parent_name:
-            level = await self._calc_activity_level(parent_name)
+            parent = await self._assert_valid_parent(parent_name)
+            parent_id = parent.id
+            level = parent.level + 1
 
-        activity = ActivityModel(
-            name=name, parent_id=parent.id if parent else None, level=level
-        )
+        activity = ActivityModel(name=name, parent_id=parent_id, level=level)
         self.session.add(activity)
         await self.session.commit()
         await self.session.refresh(activity)
@@ -121,111 +116,6 @@ class AlchemyOrganizationRepo:
 
     # Querry
 
-    async def get_orgs_by_address(self, address: str) -> list[OrganizationModel]:
-        """
-        Найти организации по адресу.
-        """
-        result = await self.session.scalars(
-            select(OrganizationModel)
-            .join(BuildingModel)
-            .where(BuildingModel.address == address)
-            .options(
-                joinedload(OrganizationModel.building),
-                selectinload(OrganizationModel.activities),
-                selectinload(OrganizationModel.phones),
-            )
-        )
-        return list(result)
-
-    async def get_orgs_by_activity(self, activity: str) -> list[OrganizationModel]:
-        """
-        Найти организации по названию вида деятельности.
-        """
-        result = await self.session.scalars(
-            select(OrganizationModel)
-            .join(OrganizationModel.activities)
-            .where(ActivityModel.name == activity)
-            .options(
-                joinedload(OrganizationModel.building),
-                selectinload(OrganizationModel.activities),
-                selectinload(OrganizationModel.phones),
-            )
-        )
-        return list(result)
-
-    async def get_orgs_in_coords(
-        self,
-        min_lat: float,
-        max_lat: float,
-        min_lon: float,
-        max_lon: float,
-    ) -> list[OrganizationModel]:
-        """
-        Найти организации, здания которых находятся в квадрате координат.
-        """
-        result = await self.session.scalars(
-            select(OrganizationModel)
-            .join(BuildingModel)
-            .where(
-                BuildingModel.latitude.between(min_lat, max_lat),
-                BuildingModel.longitude.between(min_lon, max_lon),
-            )
-            .options(
-                joinedload(OrganizationModel.building),
-                selectinload(OrganizationModel.activities),
-                selectinload(OrganizationModel.phones),
-            )
-        )
-        return list(result)
-
-    async def get_orgs_by_activity_deep(self, activity: str) -> list[OrganizationModel]:
-        """
-        Найти организации, занимающиеся указанной деятельностью ИЛИ любой подкатегорией.
-        """
-
-        # все ID видов деятельности, начиная с заданного названия
-        activity_cte = (
-            select(ActivityModel.id)
-            .where(ActivityModel.name == activity)
-            .cte(name="activity_tree", recursive=True)
-        )
-        activity_cte = activity_cte.union_all(
-            select(ActivityModel.id).where(ActivityModel.parent_id == activity_cte.c.id)
-        )
-
-        # ID организаций, связанных с любым из этих видов деятельности
-        org_ids_subq = (
-            select(organization_activity.c.organization_id)
-            .where(organization_activity.c.activity_id.in_(select(activity_cte.c.id)))
-            .subquery()
-        )
-
-        # Запрос самих организаций
-        result = await self.session.scalars(
-            select(OrganizationModel)
-            .where(OrganizationModel.id.in_(select(org_ids_subq)))
-            .options(
-                joinedload(OrganizationModel.building),
-                selectinload(OrganizationModel.activities),
-                selectinload(OrganizationModel.phones),
-            )
-        )
-        return list(result)
-
-    async def get_org_by_name(self, name: str) -> OrganizationModel | None:
-        """
-        Найти организацию по названию.
-        """
-        return await self.session.scalar(
-            select(OrganizationModel)
-            .where(OrganizationModel.name == name)
-            .options(
-                joinedload(OrganizationModel.building),
-                selectinload(OrganizationModel.activities),
-                selectinload(OrganizationModel.phones),
-            )
-        )
-
     async def get_org_by_id(self, org_id: int) -> OrganizationModel | None:
         """
         Найти организацию по ID.
@@ -238,4 +128,90 @@ class AlchemyOrganizationRepo:
                 selectinload(OrganizationModel.activities),
                 selectinload(OrganizationModel.phones),
             )
+        )
+
+    async def search(
+        self,
+        *,
+        address: str | None = None,
+        #
+        name: str | None = None,
+        #
+        activity: str | None = None,
+        propagate: bool = False,
+        #
+        lat: float | None = None,
+        lon: float | None = None,
+        radius: float | None = None,
+    ) -> list[OrganizationModel]:
+        """
+        Найти организацию по разным параметрам.
+        """
+
+        stmt = select(OrganizationModel).distinct()
+
+        # связанные сущности
+        stmt = stmt.options(
+            joinedload(OrganizationModel.building),
+            selectinload(OrganizationModel.activities),
+            selectinload(OrganizationModel.phones),
+        )
+
+        # building если нужен адрес или координаты
+        if address or (lat is not None and lon is not None):
+            stmt = stmt.join(BuildingModel)
+
+        # activities если нужен фильтр по деятельности
+        if activity:
+            stmt = stmt.join(OrganizationModel.activities)
+
+        conditions: list[ColumnElement[bool]] = []
+
+        # Фильтр по адресу
+        if address:
+            conditions.append(BuildingModel.address == address)
+        # Фильтр по названию
+        if name:
+            conditions.append(OrganizationModel.name.ilike(f"%{name}%"))
+        # Фильтр по деятельности
+        if activity:
+            deep_activity_stmt = self._get_activity_stmt(activity, propagate)
+            conditions.append(deep_activity_stmt)
+        # Фильтр по координатам
+        if lat is not None and lon is not None and radius is not None:
+            coords_stmt = self._get_coords_stmt(lat, lon, radius)
+            conditions.append(coords_stmt)
+
+        if conditions:
+            stmt = stmt.where(*conditions)
+
+        result = await self.session.scalars(stmt)
+        return list(result)
+
+    # Utils
+
+    def _get_activity_stmt(self, activity: str, propagate: bool) -> ColumnElement[bool]:
+        """Собрать условие поиска по типу деятельности."""
+        if not propagate:
+            return ActivityModel.name == activity
+
+        activity_cte = (
+            select(ActivityModel.id)
+            .where(ActivityModel.name == activity)
+            .cte(name="activity_tree", recursive=True)
+        )
+        activity_cte = activity_cte.union_all(
+            select(ActivityModel.id).where(ActivityModel.parent_id == activity_cte.c.id)
+        )
+        return ActivityModel.id.in_(select(activity_cte.c.id))
+
+    def _get_coords_stmt(
+        self, lat: float, lon: float, radius: float
+    ) -> ColumnElement[bool]:
+        """Собрать условие поиска по координатам."""
+
+        min_lat, max_lat, min_lon, max_lon = get_bounding_box(lat, lon, radius)
+        return and_(
+            BuildingModel.latitude.between(min_lat, max_lat),
+            BuildingModel.longitude.between(min_lon, max_lon),
         )

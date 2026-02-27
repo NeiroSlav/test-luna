@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from api.routers.activity import activity_router
 from api.routers.building import building_router
 from api.routers.org import org_router
-from infra.sql import run_migrations
+from infra.sql import fill_db, run_migrations
 
 
 @asynccontextmanager
@@ -14,6 +14,7 @@ async def lifespan(app: FastAPI):
     """Миграция alembic при старте"""
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, run_migrations)
+    await fill_db()
 
     yield
 

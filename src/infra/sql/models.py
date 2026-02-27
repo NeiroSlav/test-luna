@@ -68,7 +68,8 @@ class ActivityModel(Base):
     __tablename__ = "activities"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str]
+    name: Mapped[str] = mapped_column(unique=True)
+    level: Mapped[int] = mapped_column(server_default="1", default=1)
     parent_id: Mapped[int | None] = mapped_column(
         ForeignKey("activities.id"),
         nullable=True,
